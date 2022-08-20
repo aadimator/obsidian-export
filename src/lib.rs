@@ -7,6 +7,7 @@ extern crate lazy_static;
 mod context;
 mod frontmatter;
 pub mod postprocessors;
+pub mod custompostprocessors;
 mod references;
 mod walker;
 
@@ -230,6 +231,8 @@ pub struct Exporter<'a> {
     vault_contents: Option<Vec<PathBuf>>,
     walk_options: WalkOptions<'a>,
     process_embeds_recursively: bool,
+    add_titles: bool,
+    strip_comments: bool,
     postprocessors: Vec<&'a Postprocessor>,
     embed_postprocessors: Vec<&'a Postprocessor>,
 }
@@ -246,6 +249,8 @@ impl<'a> fmt::Debug for Exporter<'a> {
                 "process_embeds_recursively",
                 &self.process_embeds_recursively,
             )
+            .field("add_titles", &self.add_titles)
+            .field("strip_comments", &self.strip_comments)
             .field(
                 "postprocessors",
                 &format!("<{} postprocessors active>", self.postprocessors.len()),
@@ -272,6 +277,8 @@ impl<'a> Exporter<'a> {
             frontmatter_strategy: FrontmatterStrategy::Auto,
             walk_options: WalkOptions::default(),
             process_embeds_recursively: true,
+            add_titles: false,
+            strip_comments: false,
             vault_contents: None,
             postprocessors: vec![],
             embed_postprocessors: vec![],
@@ -309,6 +316,31 @@ impl<'a> Exporter<'a> {
     /// original note, instead of embedding it again a link to the note is inserted instead.
     pub fn process_embeds_recursively(&mut self, recursive: bool) -> &mut Exporter<'a> {
         self.process_embeds_recursively = recursive;
+        self
+    }
+
+    /// Enable or disable addition of title headings to the top of each parsed note
+    ///
+    /// When this option is enabled, each parsed note will be considered to start with a heading:
+    ///
+    ///   # Title-of-note
+    ///
+    /// even when no such line is present in the source file. The title is inferred based on the
+    /// filename of the note.
+    ///
+    /// This option makes heavily nested note embeds make more sense in the exported document,
+    /// since it shows which note the embedded content comes from. It loosely matches the behaviour
+    /// of the mainline Obsidian UI when viewing notes in preview mode.
+    pub fn add_titles(&mut self, add_titles: bool) -> &mut Exporter<'a> {
+        self.add_titles = add_titles;
+        self
+    }
+
+    /// Strip comment lines from output.
+    ///
+    /// A comment line is one which begins with the characters "%%".
+    pub fn strip_comments(&mut self, strip_comments: bool) -> &mut Exporter<'a> {
+        self.strip_comments = strip_comments;
         self
     }
 
@@ -455,6 +487,16 @@ impl<'a> Exporter<'a> {
         // Most of the time, a reference triggers 5 events: [ or ![, [, <text>, ], ]
         let mut buffer = Vec::with_capacity(5);
 
+        if self.add_titles {
+            // Ensure that each (possibly embedded) note starts with a reasonable top-level heading
+            let note_name = infer_note_title_from_path(path);
+            let h1_tag = Tag::Heading(HeadingLevel::H1, None, vec![]);
+
+            events.push(Event::Start(h1_tag.clone()));
+            events.push(Event::Text(note_name));
+            events.push(Event::End(h1_tag.clone()));
+        }
+
         for event in Parser::new_ext(&content, parser_options) {
             if ref_parser.state == RefParserState::Resetting {
                 events.append(&mut buffer);
@@ -472,6 +514,14 @@ impl<'a> Exporter<'a> {
                         Event::Text(CowStr::Borrowed("[")) => {
                             ref_parser.ref_type = Some(RefType::Link);
                             ref_parser.transition(RefParserState::ExpectSecondOpenBracket);
+                        }
+                        Event::Text(ref s) => {
+                            // TODO: This only handles %% at beginning of line, and doesn't handle
+                            // other formatting embedded in comments
+                            if self.strip_comments && !s.starts_with("%%") {
+                                events.push(event);
+                            }
+                            buffer.clear();
                         }
                         _ => {
                             events.push(event);
@@ -513,10 +563,12 @@ impl<'a> Exporter<'a> {
                 RefParserState::ExpectFinalCloseBracket => match event {
                     Event::Text(CowStr::Borrowed("]")) => match ref_parser.ref_type {
                         Some(RefType::Link) => {
-                            let mut elements = self.make_link_to_file(
-                                ObsidianNoteReference::from_str(
-                                    ref_parser.ref_text.clone().as_ref()
-                                ),
+                            // println!("{}", ref_parser.ref_text.clone().to_string());
+                            let mut elements = self.make_wiki_link(
+                                // ObsidianNoteReference::from_str(
+                                    &ref_parser.ref_text.clone().to_string()
+                                // ),
+                                ,
                                 context,
                             );
                             events.append(&mut elements);
@@ -601,6 +653,10 @@ impl<'a> Exporter<'a> {
                 child_context.frontmatter = frontmatter;
                 if let Some(section) = note_ref.section {
                     events = reduce_to_section(events, section);
+                    events.insert(0, Event::Text(CowStr::from("\n<div class=\"markdown-embed\">\n<div class=\"markdown-embed-content\">\n\n")));
+                    events.push(Event::Text(CowStr::from(format!("\n</div>\n<div class=\"markdown-embed-link\">\n\n[[{}]]\n\n</div>\n</div>", link_text))));
+                    // events.append(&mut self.make_link_to_file(note_ref, &child_context));
+                    // events.push(Event::Text(CowStr::from("")));
                 }
                 for func in &self.embed_postprocessors {
                     // Postprocessors running on embeds shouldn't be able to change frontmatter (or
@@ -646,6 +702,45 @@ impl<'a> Exporter<'a> {
         Ok(events)
     }
 
+    fn make_wiki_link<'b, 'c>(
+        &self,
+        link_label: &String,
+        context: &Context,
+    ) -> MarkdownEvents<'c> {
+        let reference = ObsidianNoteReference::from_str(link_label);
+        let target_file = reference
+            .file
+            .map(|file| lookup_filename_in_vault(file, &self.vault_contents.as_ref().unwrap()))
+            .unwrap_or_else(|| Some(context.current_file()));
+
+        if target_file.is_none() {
+            // TODO: Extract into configurable function.
+            eprintln!(
+                "Warning: Unable to find referenced note\n\tReference: '{}'\n\tSource: '{}'\n",
+                reference
+                    .file
+                    .unwrap_or_else(|| context.current_file().to_str().unwrap()),
+                context.current_file().display(),
+            );
+            return vec![
+                Event::Text(CowStr::from(link_label.to_string())),
+            ]
+        }
+        // let mut link = "[[".to_string();
+        // link.push_str(&reference.display());
+        // if let Some(section) = reference.section {
+        //     link.push('#');
+        //     link.push_str(&slugify(section));
+        // }
+        // link.push_str("]]");
+
+        let link = format!("[[{}]]", reference.file.unwrap_or_else(|| context.current_file().to_str().unwrap()));
+
+        vec![
+            Event::Text(CowStr::from(link.to_string())),
+        ]
+    }
+
     fn make_link_to_file<'b, 'c>(
         &self,
         reference: ObsidianNoteReference<'b>,
@@ -665,10 +760,15 @@ impl<'a> Exporter<'a> {
                     .unwrap_or_else(|| context.current_file().to_str().unwrap()),
                 context.current_file().display(),
             );
+            let dummy_link_tag = pulldown_cmark::Tag::Link(
+                pulldown_cmark::LinkType::Inline,
+                CowStr::from(""),
+                CowStr::from(""),
+            );
             return vec![
-                Event::Start(Tag::Emphasis),
+                Event::Start(dummy_link_tag.clone()),
                 Event::Text(CowStr::from(reference.display())),
-                Event::End(Tag::Emphasis),
+                Event::End(dummy_link_tag.clone()),
             ];
         }
         let target_file = target_file.unwrap();
@@ -725,6 +825,15 @@ fn lookup_filename_in_vault<'a>(
     })
 }
 
+fn infer_note_title_from_path(path: &Path) -> CowStr {
+    const PLACEHOLDER_TITLE: &str = "invalid-note-title";
+
+    match path.file_stem() {
+        None => CowStr::from(PLACEHOLDER_TITLE),
+        Some(s) => CowStr::from(s.to_string_lossy().into_owned()),
+    }
+}
+
 fn render_mdevents_to_mdtext(markdown: MarkdownEvents) -> String {
     let mut buffer = String::new();
     cmark_with_options(
@@ -777,6 +886,7 @@ fn is_markdown_file(file: &Path) -> bool {
 /// Reduce a given `MarkdownEvents` to just those elements which are children of the given section
 /// (heading name).
 fn reduce_to_section<'a, 'b>(events: MarkdownEvents<'a>, section: &'b str) -> MarkdownEvents<'a> {
+    // println!("{}", section);
     let mut filtered_events = Vec::with_capacity(events.len());
     let mut target_section_encountered = false;
     let mut currently_in_target_section = false;
@@ -803,6 +913,7 @@ fn reduce_to_section<'a, 'b>(events: MarkdownEvents<'a>, section: &'b str) -> Ma
                 }
                 last_tag_was_heading = false;
 
+                // println!("{} : {}", section.to_lowercase(), cowstr.to_string().to_lowercase());
                 if cowstr.to_string().to_lowercase() == section.to_lowercase() {
                     target_section_encountered = true;
                     currently_in_target_section = true;
@@ -818,9 +929,11 @@ fn reduce_to_section<'a, 'b>(events: MarkdownEvents<'a>, section: &'b str) -> Ma
             _ => {}
         }
         if target_section_encountered && !currently_in_target_section {
+            // println!("{:?}", filtered_events);
             return filtered_events;
         }
     }
+    // println!("{:?}", filtered_events);
     filtered_events
 }
 

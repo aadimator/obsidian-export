@@ -1,7 +1,8 @@
 use eyre::{eyre, Result};
 use gumdrop::Options;
-use obsidian_export::postprocessors::softbreaks_to_hardbreaks;
 use obsidian_export::{ExportError, Exporter, FrontmatterStrategy, WalkOptions};
+use obsidian_export::postprocessors::softbreaks_to_hardbreaks;
+use obsidian_export::custompostprocessors::{add_author, remove_empty_aliases};
 use std::{env, path::PathBuf};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -54,6 +55,20 @@ struct Opts {
         default = "false"
     )]
     hard_linebreaks: bool,
+
+    #[options(
+        no_short,
+        help = "Add a heading to the beginning of each note based on its filename",
+        default = "false"
+    )]
+    add_titles: bool,
+
+    #[options(
+        no_short,
+        help = "Strip out comment lines beginning with '%%'",
+        default = "false"
+    )]
+    strip_comments: bool,
 }
 
 fn frontmatter_strategy_from_str(input: &str) -> Result<FrontmatterStrategy> {
@@ -88,8 +103,13 @@ fn main() {
     let mut exporter = Exporter::new(root, destination);
     exporter.frontmatter_strategy(args.frontmatter_strategy);
     exporter.process_embeds_recursively(!args.no_recursive_embeds);
+    exporter.add_titles(args.add_titles);
+    exporter.strip_comments(args.strip_comments);
     exporter.walk_options(walk_options);
 
+    exporter.add_postprocessor(&add_author);
+    exporter.add_postprocessor(&remove_empty_aliases);
+    
     if args.hard_linebreaks {
         exporter.add_postprocessor(&softbreaks_to_hardbreaks);
     }
