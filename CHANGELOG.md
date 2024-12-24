@@ -1,5 +1,270 @@
 # Changelog
 
+<!-- towncrier release notes start -->
+
+## [24.11.0](https://github.com/zoni/obsidian-export/tree/24.11.0) - 2024-11-23
+
+### New Features
+
+- Optionally preserve modified time of exported files
+
+  Add a new argument `--preserve-mtime` to keep the original modified time attribute of notes being exported, instead of setting them to the current time.
+
+  Contribution made by [Davis Davalos-DeLosh](https://github.com/Programmerino). ([#154](https://github.com/zoni/obsidian-export/issues/154), [#204](https://github.com/zoni/obsidian-export/issues/204))
+
+### Changes
+
+- Bump to the minimum supported Rust version to 1.80.0
+
+  Obsidian-export now uses [std::sync::LazyLock](https://doc.rust-lang.org/std/sync/struct.LazyLock.html) instead of [lazy_static](https://crates.io/crates/lazy_static), which was only stabilized in Rust 1.80.0.
+  This change made it possible to drop the external dependency on lazy_static, though as a result of this, compiling with older versions will no longer be possible.
+
+### Fixes
+
+- Don't escape square brackets in math expressions
+
+  The upgrade to [pulldown-cmark](https://crates.io/crates/pulldown-cmark) 0.11 (see Backwards-incompatible Changes) includes official support for LaTeX-style math expressions.
+  With the markdown parser supporting this syntax natively, math expressions are now processed correctly without edge-cases. ([#14](https://github.com/zoni/obsidian-export/issues/14), [#252](https://github.com/zoni/obsidian-export/issues/252))
+
+### Backwards-incompatible Changes
+
+- Upgrade [pulldown-cmark](https://crates.io/crates/pulldown-cmark) from 0.9 to 0.12
+
+  pulldown-cmark is the Markdown/CommonMark parser that is used to read and convert notes (together with [pulldown-cmark-to-cmark](https://crates.io/crates/pulldown-cmark-to-cmark)).
+
+  For end-users that call the obsidian-export CLI this upgrade will be mostly transparent, except that Math blocks are now properly processed without getting mangled.
+
+  People who use the library directly may face more significant breaking changes if they have custom postprocessors, as pulldown-cmark's events have gone through various breaking changes.
+  For more information, see:
+
+  - <https://github.com/zoni/obsidian-export/pull/252>
+  - <https://github.com/pulldown-cmark/pulldown-cmark/releases/tag/v0.10.0>
+  - <https://github.com/zoni/obsidian-export/pull/276/files#diff-b1a35a68f14e696205874893c07fd24fdb88882b47c23cc0e0c80a30c7d53759>
+
+  ([#14](https://github.com/zoni/obsidian-export/issues/14), [#252](https://github.com/zoni/obsidian-export/issues/252), [#259](https://github.com/zoni/obsidian-export/issues/259), [#285](https://github.com/zoni/obsidian-export/issues/285))
+
+
+## v23.12.0 (2023-12-03)
+
+### New
+
+- Implement frontmatter based filtering (#163) [Martin Heuschober]
+
+  This allows limiting the notes that will be exported using `--skip-tags` and `--only-tags`:
+
+  - using `--skip-tags foo --skip-tags bar` will skip any files that have the tags `foo` or `bar` in their frontmatter
+  - using `--only-tags foo --only-tags bar` will skip any files that **don't** have the tags `foo` or `bar` in their frontmatter
+
+### Fixes
+
+- Trim filenames while resolving wikilinks [Nick Groenen]
+
+  Obsidian trims the filename part in a [[WikiLink|label]], so each of
+  these are equivalent:
+
+  ```
+  [[wikilink]]
+  [[ wikilink ]]
+  [[ wikilink |wikilink]]
+  ```
+
+  Obsidian-export now behaves similarly.
+
+  Fixes #188
+
+### Other
+
+- Relicense to BSD-2-Clause Plus Patent License [Nick Groenen]
+
+  This license achieves everything that dual-licensing under MIT + Apache
+  aims for, but without the weirdness of being under two licenses.
+
+  Having checked external contributions, I feel pretty confident that I
+  can unilaterally make this license change, as people have only
+  contributed a handful of one-line changes of no significance towards
+  copyrighted work up to this point.
+
+
+- Add a lifetime annotation to the Postprocesor type [Robert Sesek]
+
+  This lets the compiler reason about the lifetimes of objects used by the
+  postprocessor, if the callback captures variables.
+
+  See zoni/obsidian-export#175
+
+- Use cargo-dist to create release artifacts [Nick Groenen]
+
+  This will create binaries for more platforms (including ARM builds for
+  MacOS) and installer scripts in addition to just the binaries themselves.
+
+## v22.11.0 (2022-11-19)
+
+### New
+
+* Apply unicode normalization while resolving notes. [Nick Groenen]
+
+  The unicode standard allows for certain (visually) identical characters to
+  be represented in different ways.
+
+  For example the character ä may be represented as a single combined
+  codepoint "Latin Small Letter A with Diaeresis" (U+00E4) or by the
+  combination of "Latin Small Letter A" (U+0061) followed by "Combining
+  Diaeresis" (U+0308).
+
+  When encoded with UTF-8, these are represented as respectively the two
+  bytes 0xC3 0xA4, and the three bytes 0x61 0xCC 0x88.
+
+  A user linking to notes with these characters in their titles would
+  expect these two variants to link to the same file, given they are
+  visually identical and have the exact same semantic meaning.
+
+  The unicode standard defines a method to deconstruct and normalize these
+  forms, so that a byte comparison on the normalized forms of these
+  variants ends up comparing the same thing. This is called Unicode
+  Normalization, defined in Unicode® Standard Annex #15
+  (http://www.unicode.org/reports/tr15/).
+
+  The W3C Working Group has written an excellent explanation of the
+  problems regarding string matching, and how unicode normalization helps
+  with this process: https://www.w3.org/TR/charmod-norm/#unicodeNormalization
+
+  With this change, obsidian-export will perform unicode normalization
+  (specifically the C (or NFC) normalization form) on all note titles
+  while looking up link references, ensuring visually identical links are
+  treated as being similar, even if they were encoded as different
+  variants.
+
+  A special thanks to Hans Raaf (@oderwat) for reporting and helping track
+  down this issue.
+
+### Breaking Changes (affects library API only)
+
+* Pass context and events as mutable references to postprocessors. [Nick Groenen]
+
+  Instead of passing clones of context and the markdown tree to
+  postprocessors, pass them a mutable reference which may be modified
+  in-place.
+
+  This is a breaking change to the postprocessor implementation, changing
+  both the input arguments as well as the return value:
+
+  ```diff
+  -    dyn Fn(Context, MarkdownEvents) -> (Context, MarkdownEvents, PostprocessorResult) + Send + Sync;
+  +    dyn Fn(&mut Context, &mut MarkdownEvents) -> PostprocessorResult + Send + Sync;
+  ```
+
+  With this change the postprocessor API becomes a little more ergonomic
+  to use however, especially making the intent around return statements more clear.
+
+### Other
+
+* Use path.Join to construct hugo links (#92) [Chang-Yen Tseng]
+
+  Use path.Join so that it will render correctly on Windows
+  (path.Join will convert Windows backslash to forward slash)
+
+* Bump crossbeam-utils from 0.8.5 to 0.8.12. [dependabot[bot]]
+
+  Bumps [crossbeam-utils](https://github.com/crossbeam-rs/crossbeam) from 0.8.5 to 0.8.12.
+  - [Release notes](https://github.com/crossbeam-rs/crossbeam/releases)
+  - [Changelog](https://github.com/crossbeam-rs/crossbeam/blob/master/CHANGELOG.md)
+  - [Commits](https://github.com/crossbeam-rs/crossbeam/compare/crossbeam-utils-0.8.5...crossbeam-utils-0.8.12)
+
+  ---
+  updated-dependencies:
+  - dependency-name: crossbeam-utils
+    dependency-type: indirect
+  ...
+
+* Bump regex from 1.6.0 to 1.7.0. [dependabot[bot]]
+
+  Bumps [regex](https://github.com/rust-lang/regex) from 1.6.0 to 1.7.0.
+  - [Release notes](https://github.com/rust-lang/regex/releases)
+  - [Changelog](https://github.com/rust-lang/regex/blob/master/CHANGELOG.md)
+  - [Commits](https://github.com/rust-lang/regex/compare/1.6.0...1.7.0)
+
+  ---
+  updated-dependencies:
+  - dependency-name: regex
+    dependency-type: direct:production
+    update-type: version-update:semver-minor
+  ...
+
+* Bump actions/checkout from 2 to 3. [dependabot[bot]]
+
+  Bumps [actions/checkout](https://github.com/actions/checkout) from 2 to 3.
+  - [Release notes](https://github.com/actions/checkout/releases)
+  - [Changelog](https://github.com/actions/checkout/blob/main/CHANGELOG.md)
+  - [Commits](https://github.com/actions/checkout/compare/v2...v3)
+
+  ---
+  updated-dependencies:
+  - dependency-name: actions/checkout
+    dependency-type: direct:production
+    update-type: version-update:semver-major
+  ...
+
+* Bump actions/upload-artifact from 2 to 3. [dependabot[bot]]
+
+  Bumps [actions/upload-artifact](https://github.com/actions/upload-artifact) from 2 to 3.
+  - [Release notes](https://github.com/actions/upload-artifact/releases)
+  - [Commits](https://github.com/actions/upload-artifact/compare/v2...v3)
+
+  ---
+  updated-dependencies:
+  - dependency-name: actions/upload-artifact
+    dependency-type: direct:production
+    update-type: version-update:semver-major
+  ...
+
+* Bump thread_local from 1.1.3 to 1.1.4. [dependabot[bot]]
+
+  Bumps [thread_local](https://github.com/Amanieu/thread_local-rs) from 1.1.3 to 1.1.4.
+  - [Release notes](https://github.com/Amanieu/thread_local-rs/releases)
+  - [Commits](https://github.com/Amanieu/thread_local-rs/compare/v1.1.3...1.1.4)
+
+  ---
+  updated-dependencies:
+  - dependency-name: thread_local
+    dependency-type: indirect
+  ...
+
+* Remove needless borrows. [Nick Groenen]
+
+* Upgrade snafu to 0.7.x. [Nick Groenen]
+
+* Upgrade pulldown-cmark-to-cmark to 10.0.x. [Nick Groenen]
+
+* Upgrade serde_yaml to 0.9.x. [Nick Groenen]
+
+* Upgrade minor dependencies. [Nick Groenen]
+
+* Fix new clippy lints. [Nick Groenen]
+
+* Add a contributor guide. [Nick Groenen]
+
+* Simplify pre-commit setup. [Nick Groenen]
+
+  No need to depend on a third-party hook repository when each of these
+  checks is easily defined and run through system commands.
+
+  This also allows us to actually run tests, which is current unsupported
+  (https://github.com/doublify/pre-commit-rust/pull/19)
+
+* Bump tempfile from 3.2.0 to 3.3.0. [dependabot[bot]]
+
+  Bumps [tempfile](https://github.com/Stebalien/tempfile) from 3.2.0 to 3.3.0.
+  - [Release notes](https://github.com/Stebalien/tempfile/releases)
+  - [Changelog](https://github.com/Stebalien/tempfile/blob/master/NEWS)
+  - [Commits](https://github.com/Stebalien/tempfile/compare/v3.2.0...v3.3.0)
+
+  ---
+  updated-dependencies:
+  - dependency-name: tempfile
+    dependency-type: direct:production
+    update-type: version-update:semver-minor
+  ...
+
 ## v22.1.0 (2022-01-02)
 
 Happy new year! On this second day of 2022 comes a fresh release with one

@@ -1,7 +1,5 @@
 # Release process
 
-- [ ] Run `./make-new-release.sh`
+- [ ] Run `just make-new-release`
 - [ ] Push the created release commit/tag to GitHub
-- [ ] Wait for builds to turn green (<https://github.com/zoni/obsidian-export/actions>)
-- [ ] Run `cargo publish`
-- [ ] Publish drafted release (<https://github.com/zoni/obsidian-export/releases>)
+- [ ] Wait for builds to turn green (<https://github.com/zoni/obsidian-export/actions>) and confirm everything looks OK.

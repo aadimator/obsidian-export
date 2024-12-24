@@ -12,9 +12,14 @@ To completely remove any frontmatter from exported notes, use `--frontmatter=nev
 
 ## Ignoring files
 
-By default, hidden files, patterns listed in `.export-ignore` as well as any files ignored by git (if your vault is part of a git repository) will be excluded from exports.
+The following files are not exported by default:
 
-These options may be adjusted with `--hidden`, `--ignore-file` and `--no-git` if desired.
+* hidden files (can be adjusted with `--hidden`)
+* files matching a pattern listed in `.export-ignore` (can be adjusted with `--ignore-file`)
+* any files that are ignored by git (can be adjusted with `--no-git`)
+* using `--skip-tags foo --skip-tags bar` will skip any files that have the tags `foo` or `bar` in their frontmatter
+* using `--only-tags foo --only-tags bar` will skip any files that **don't** have the tags `foo` or `bar` in their frontmatter
+
 (See `--help` for more information).
 
 Notes linking to ignored notes will be unlinked (they'll only include the link text).
@@ -112,4 +117,4 @@ With these hooks in place, links to both notes as well as file attachments shoul
 [gitignore]: https://git-scm.com/docs/gitignore
 [hugo-relative-linking]: https://notes.nick.groenen.me/notes/relative-linking-in-hugo/
 [hugo]: https://gohugo.io
-[markdown render hooks]: https://gohugo.io/getting-started/configuration-markup#markdown-render-hooks 
+[markdown render hooks]: https://gohugo.io/getting-started/configuration-markup#markdown-render-hooks
